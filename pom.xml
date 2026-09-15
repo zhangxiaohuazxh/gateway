@@ -73,6 +73,7 @@
     </dependencyManagement>
 
     <build>
+        <finalName>gateway</finalName>
         <plugins>
             <plugin>
                 <groupId>org.graalvm.buildtools</groupId>
