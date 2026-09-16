@@ -18,7 +18,7 @@ import java.nio.charset.StandardCharsets;
 @Slf4j
 public class ResponseUtils {
 
-    private static final String DEFAULT_UNKNOWN_ERROR_RESPONSE = "";
+    private static final String DEFAULT_UNKNOWN_ERROR_RESPONSE = "{\"code\":500,\"msg\":\"系统内部错误，请稍候重试\"}";
 
     public static Mono<Void> writeError(@NonNull ServerWebExchange exchange, @NonNull HttpStatus status, @NonNull String body) {
         ServerHttpResponse response = exchange.getResponse();
@@ -33,10 +33,6 @@ public class ResponseUtils {
             return response.writeWith(Mono.just(buffer)).doFinally(ignore -> {
                 DataBufferUtils.release(buffer);
             });
-        } finally {
-            if (dataBuffer != null) {
-                DataBufferUtils.release(dataBuffer);
-            }
         }
     }
 
