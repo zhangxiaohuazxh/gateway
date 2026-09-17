@@ -1,0 +1,156 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="UTF-8"/>
+    <title>X25519 密钥协商 Demo</title>
+</head>
+<body>
+<h3>X25519 密钥协商 + AES-GCM 加密</h3>
+<button id="btn">执行握手并发送加密消息</button>
+<pre id="log"></pre>
+
+<script>
+    const log = (msg) => {
+      document.getElementById("log").textContent += msg + "\n";
+    };
+
+    // 工具：ArrayBuffer -> Base64
+    function bufToBase64(buf) {
+      return btoa(String.fromCharCode(...new Uint8Array(buf)));
+    }
+
+    // 工具：Base64 -> Uint8Array
+    function base64ToBuf(b64) {
+      return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    }
+
+    // HKDF 派生 AES-GCM 密钥
+    async function deriveAesKey(sharedSecret, info) {
+      const hkdfKey = await crypto.subtle.importKey(
+        "raw",
+        sharedSecret,
+        "HKDF",
+        false,
+        ["deriveKey"],
+      );
+
+      return crypto.subtle.deriveKey(
+        {
+          name: "HKDF",
+          hash: "SHA-256",
+          salt: new Uint8Array(0), // 实际场景应使用随机 salt
+          info: new TextEncoder().encode(info),
+        },
+        hkdfKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"],
+      );
+    }
+
+    async function decryptFromServer(aesKey, ivB64, dataB64) {
+      // 1. Base64 解码
+      const iv = base64ToBuf(ivB64);
+      const ciphertext = base64ToBuf(dataB64);
+
+      // 2. 执行解密
+      const plaintextBuffer = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: iv },
+        aesKey,
+        ciphertext,
+      );
+
+      // 3. ArrayBuffer 转字符串
+      return new TextDecoder().decode(plaintextBuffer);
+    }
+
+    async function run() {
+      // 1. 前端生成 X25519 密钥对
+      const clientKP = await crypto.subtle.generateKey(
+        { name: "X25519" },
+        true,
+        ["deriveKey", "deriveBits"],
+      );
+
+      // 导出前端公钥（raw 格式，32 字节）
+      const clientPubRaw = await crypto.subtle.exportKey(
+        "raw",
+        clientKP.publicKey,
+      );
+      const clientPubB64 = bufToBase64(clientPubRaw);
+
+      log("前端公钥: " + clientPubB64);
+
+      // 2. 发送给后端，交换公钥
+      const resp = await fetch(
+        "http://localhost:8888/api/security/security/computed",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientPubKey: clientPubB64 }),
+        },
+      );
+      const { serverPubKey: serverPubB64 } = await resp.json();
+
+      log("后端公钥: " + serverPubB64);
+
+      // 3. 导入后端公钥
+      const serverPubKey = await crypto.subtle.importKey(
+        "raw",
+        base64ToBuf(serverPubB64),
+        { name: "X25519" },
+        false,
+        [],
+      );
+
+      // 4. 计算共享密钥（32 字节）
+      const sharedSecret = await crypto.subtle.deriveBits(
+        { name: "X25519", public: serverPubKey },
+        clientKP.privateKey,
+        256,
+      );
+
+      log("共享密钥长度: " + sharedSecret.byteLength + " 字节");
+
+      // 5. HKDF 派生 AES-GCM 密钥
+      const aesKey = await deriveAesKey(sharedSecret, "demo-session");
+
+      // 6. 用 AES-GCM 加密一条消息
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const plaintext = new TextEncoder().encode("Hello from client!");
+      const ciphertext = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        aesKey,
+        plaintext,
+      );
+
+      // 7. 发送加密消息
+      const sendResp = await fetch(
+        "http://localhost:8888/api/security/security/encrypt/test",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            iv: bufToBase64(iv),
+            data: bufToBase64(ciphertext),
+          }),
+        },
+      );
+      let data = await sendResp.json();
+      data = data.data;
+      console.log("后端返回的加密数据", data.data);
+      try {
+        const result = await decryptFromServer(aesKey, data.iv, data.data);
+        log("后端解密结果: " + result);
+      } catch (e) {
+        console.log("解密失败", e);
+      }
+    }
+
+    document.getElementById("btn").onclick = () => {
+      document.getElementById("log").textContent = "";
+      run().catch((e) => log("错误: " + e.message));
+    };
+</script>
+</body>
+</html>
